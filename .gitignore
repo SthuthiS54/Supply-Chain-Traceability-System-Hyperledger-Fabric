@@ -1,0 +1,20 @@
+# Generated crypto material
+organizations/peerOrganizations/
+organizations/ordererOrganizations/
+organizations/fabric-ca/
+
+# Channel artifacts
+channel-artifacts/
+
+# Chaincode dependencies (can be restored with go mod tidy)
+chaincode/supplychain/go/vendor/
+
+# Packaged chaincode
+*.tar.gz
+
+# Logs
+log.txt
+*.log
+
+# System files
+.DS_Store
