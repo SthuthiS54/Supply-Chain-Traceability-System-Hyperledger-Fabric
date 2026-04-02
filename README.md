@@ -1,69 +1,268 @@
-# Running the test network
+cat > ~/fabric-samples/supplychain-network/README.md << 'EOF'
+# Supply Chain Tracking System - Hyperledger Fabric
 
-You can use the `./network.sh` script to stand up a simple Fabric test network. The test network has two peer organizations with one peer each and a single node raft ordering service. You can also use the `./network.sh` script to create channels and deploy chaincode. For more information, see [Using the Fabric test network](https://hyperledger-fabric.readthedocs.io/en/latest/test_network.html). The test network is being introduced in Fabric v2.0 as the long term replacement for the `first-network` sample.
+A blockchain-based supply chain tracking application built on Hyperledger Fabric v2.5.15 with three organizations: Manufacturer, Distributor, and Retailer.
 
-If you are planning to run the test network with consensus type BFT then please pass `-bft` flag as input to the `network.sh` script when creating the channel. This sample also supports the use of consensus type BFT and CA together.
-That is to create a network use:
-```bash
-./network.sh up -bft
+## Network Architecture
+```
+supplychainchannel
+├── peer0.manufacturer.example.com  (port 7051)  — ManufacturerMSP
+├── peer0.distributor.example.com   (port 9051)  — DistributorMSP
+└── peer0.retailer.example.com      (port 11051) — RetailerMSP
+
+Orderer: orderer.example.com (port 7050)
+State DB: CouchDB (couchdb0, couchdb1, couchdb2)
 ```
 
-To create a channel use:
+## Prerequisites
 
+- Docker Engine 20.x+
+- Docker Compose v2.x
+- Go 1.19+
+- Hyperledger Fabric binaries v2.5.x
+- jq
+
+### Install Fabric Binaries
 ```bash
-./network.sh createChannel -bft
+curl -sSL https://bit.ly/2ysbOFE | bash -s -- 2.5.15 1.5.7
+export PATH=$PATH:$HOME/fabric-samples/bin
+export FABRIC_CFG_PATH=$HOME/fabric-samples/config
 ```
 
-To restart a running network use:
+### Fix Docker Compose (Ubuntu 24)
 
+If you get a `ContainerConfig` error, run:
 ```bash
-./network.sh restart -bft
+sudo update-alternatives --set iptables /usr/sbin/iptables-legacy
+sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+sudo systemctl start docker
 ```
 
-Note that running the createChannel command will start the network, if it is not already running.
-
-Before you can deploy the test network, you need to follow the instructions to [Install the Samples, Binaries and Docker Images](https://hyperledger-fabric.readthedocs.io/en/latest/install.html) in the Hyperledger Fabric documentation.
-
-## Using the Peer commands
-
-The `setOrgEnv.sh` script can be used to set up the environment variables for the organizations, this will help to be able to use the `peer` commands directly.
-
-First, ensure that the peer binaries are on your path, and the Fabric Config path is set assuming that you're in the `test-network` directory.
-
+Force Docker Compose v2 in network.sh (already applied in this repo):
 ```bash
- export PATH=$PATH:$(realpath ../bin)
- export FABRIC_CFG_PATH=$(realpath ../config)
+sed -i '32s/.*/if false; then/' network.sh
 ```
 
-You can then set up the environment variables for each organization. The `./setOrgEnv.sh` command is designed to be run as follows.
+## Setup
 
+### 1. Clone the repository
 ```bash
-export $(./setOrgEnv.sh Org2 | xargs)
+git clone git@github.com:SthuthiS54/Supply-Chain-Network.git
+cd Supply-Chain-Network
 ```
 
-(Note bash v4 is required for the scripts.)
-
-You will now be able to run the `peer` commands in the context of Org2. If a different command prompt, you can run the same command with Org1 instead.
-The `setOrgEnv` script outputs a series of `<name>=<value>` strings. These can then be fed into the export command for your current shell.
-
-## Chaincode-as-a-service
-
-To learn more about how to use the improvements to the Chaincode-as-a-service please see this [tutorial](./test-network/../CHAINCODE_AS_A_SERVICE_TUTORIAL.md). It is expected that this will move to augment the tutorial in the [Hyperledger Fabric ReadTheDocs](https://hyperledger-fabric.readthedocs.io/en/release-2.4/cc_service.html)
-
-
-## Podman
-
-*Note - podman support should be considered experimental but the following has been reported to work with podman 4.1.1 on Mac. If you wish to use podman a LinuxVM is recommended.*
-
-Fabric's `install-fabric.sh` script has been enhanced to support using `podman` to pull down images and tag them rather than docker. The images are the same, just pulled differently. Simply specify the 'podman' argument when running the `install-fabric.sh` script. 
-
-Similarly, the `network.sh` script has been enhanced so that it can use `podman` and `podman-compose` instead of docker. Just set the environment variable `CONTAINER_CLI` to `podman` before running the `network.sh` script:
-
+### 2. Add to PATH
 ```bash
-CONTAINER_CLI=podman ./network.sh up
-````
+export PATH=$PATH:$HOME/fabric-samples/bin
+export FABRIC_CFG_PATH=$HOME/fabric-samples/config
+```
 
-As there is no Docker-Daemon when using podman, only the `./network.sh deployCCAAS` command will work. Following the Chaincode-as-a-service Tutorial above should work. 
+### 3. Start the network and create channel
+```bash
+./network.sh up createChannel -c supplychainchannel -s couchdb
+```
 
+This will:
+- Generate crypto material for Manufacturer, Distributor, and Retailer
+- Start 7 Docker containers (3 peers + orderer + 3 CouchDB instances)
+- Create the `supplychainchannel` channel
+- Join all 3 peers to the channel
+- Set anchor peers for all 3 organizations
 
-# Supply-Chain-Network
+### 4. Verify peers joined the channel
+```bash
+# Set Manufacturer env
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="ManufacturerMSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/manufacturer.example.com/peers/peer0.manufacturer.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/manufacturer.example.com/users/Admin@manufacturer.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+
+peer channel list
+```
+
+## Deploy Chaincode
+
+### 1. Package
+```bash
+peer lifecycle chaincode package supplychain.tar.gz \
+  --path ./chaincode/supplychain/go/ \
+  --lang golang \
+  --label supplychain_1.0
+```
+
+### 2. Install on all peers
+```bash
+# Manufacturer
+export CORE_PEER_LOCALMSPID="ManufacturerMSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/manufacturer.example.com/peers/peer0.manufacturer.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/manufacturer.example.com/users/Admin@manufacturer.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+peer lifecycle chaincode install supplychain.tar.gz
+
+# Distributor
+export CORE_PEER_LOCALMSPID="DistributorMSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/distributor.example.com/peers/peer0.distributor.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/distributor.example.com/users/Admin@distributor.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+peer lifecycle chaincode install supplychain.tar.gz
+
+# Retailer
+export CORE_PEER_LOCALMSPID="RetailerMSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/retailer.example.com/peers/peer0.retailer.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/retailer.example.com/users/Admin@retailer.example.com/msp
+export CORE_PEER_ADDRESS=localhost:11051
+peer lifecycle chaincode install supplychain.tar.gz
+```
+
+### 3. Get Package ID
+```bash
+peer lifecycle chaincode queryinstalled
+export CC_PACKAGE_ID=supplychain_1.0:<hash>  # replace with actual hash
+```
+
+### 4. Approve for all orgs
+```bash
+# Run approveformyorg for each org (switch env vars as above)
+peer lifecycle chaincode approveformyorg \
+  -o localhost:7050 \
+  --ordererTLSHostnameOverride orderer.example.com \
+  --channelID supplychainchannel \
+  --name supplychain \
+  --version 1.0 \
+  --package-id $CC_PACKAGE_ID \
+  --sequence 1 \
+  --tls \
+  --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```
+
+### 5. Commit
+```bash
+peer lifecycle chaincode commit \
+  -o localhost:7050 \
+  --ordererTLSHostnameOverride orderer.example.com \
+  --channelID supplychainchannel \
+  --name supplychain \
+  --version 1.0 \
+  --sequence 1 \
+  --tls \
+  --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem \
+  --peerAddresses localhost:7051 \
+  --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/manufacturer.example.com/peers/peer0.manufacturer.example.com/tls/ca.crt \
+  --peerAddresses localhost:9051 \
+  --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/distributor.example.com/peers/peer0.distributor.example.com/tls/ca.crt \
+  --peerAddresses localhost:11051 \
+  --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/retailer.example.com/peers/peer0.retailer.example.com/tls/ca.crt
+```
+
+## Run Transactions
+
+### Manufacturer creates product batch
+```bash
+export CORE_PEER_LOCALMSPID="ManufacturerMSP"
+export CORE_PEER_ADDRESS=localhost:7051
+# (set TLS env vars for Manufacturer)
+
+peer chaincode invoke \
+  -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com \
+  --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem \
+  -C supplychainchannel -n supplychain \
+  --peerAddresses localhost:7051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/manufacturer.example.com/peers/peer0.manufacturer.example.com/tls/ca.crt \
+  --peerAddresses localhost:9051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/distributor.example.com/peers/peer0.distributor.example.com/tls/ca.crt \
+  --peerAddresses localhost:11051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/retailer.example.com/peers/peer0.retailer.example.com/tls/ca.crt \
+  -c '{"function":"CreateProductBatch","Args":["BATCH001","Laptop","100","Mumbai"]}'
+```
+
+### Distributor updates shipment status
+```bash
+# Switch to Distributor env vars
+peer chaincode invoke ... \
+  -c '{"function":"UpdateShipmentStatus","Args":["BATCH001","Delhi"]}'
+```
+
+### Retailer confirms delivery
+```bash
+# Switch to Retailer env vars
+peer chaincode invoke ... \
+  -c '{"function":"ConfirmDelivery","Args":["BATCH001","Bangalore"]}'
+```
+
+### Query current state
+```bash
+peer chaincode query -C supplychainchannel -n supplychain \
+  -c '{"function":"QueryBatch","Args":["BATCH001"]}'
+```
+
+### Query full product history
+```bash
+peer chaincode query -C supplychainchannel -n supplychain \
+  -c '{"function":"GetProductHistory","Args":["BATCH001"]}'
+```
+
+## Expected Output
+
+**QueryBatch:**
+```json
+{
+  "batchID": "BATCH001",
+  "productName": "Laptop",
+  "quantity": 100,
+  "status": "DELIVERED",
+  "currentHolder": "Retailer",
+  "location": "Bangalore",
+  "timestamp": "2026-04-02T03:48:20Z",
+  "transactionID": "ab794ce7..."
+}
+```
+
+**GetProductHistory:**
+```json
+[
+  {"txID":"ab794ce7...","timestamp":"2026-04-02T03:48:20Z","record":{"status":"DELIVERED","currentHolder":"Retailer","location":"Bangalore"}},
+  {"txID":"0c3220a7...","timestamp":"2026-04-02T03:46:52Z","record":{"status":"IN_TRANSIT","currentHolder":"Distributor","location":"Delhi"}},
+  {"txID":"c07852fb...","timestamp":"2026-04-02T03:44:50Z","record":{"status":"CREATED","currentHolder":"Manufacturer","location":"Mumbai"}}
+]
+```
+
+## Chaincode Functions
+
+| Function | Caller | Description |
+|---|---|---|
+| `CreateProductBatch` | Manufacturer | Creates a new product batch on the ledger |
+| `UpdateShipmentStatus` | Distributor | Updates batch status to IN_TRANSIT |
+| `ConfirmDelivery` | Retailer | Updates batch status to DELIVERED |
+| `QueryBatch` | Any | Returns current state of a batch |
+| `GetProductHistory` | Any | Returns full lifecycle using GetHistoryForKey API |
+
+## Tear Down
+```bash
+./network.sh down
+```
+
+## Project Structure
+```
+supplychain-network/
+├── chaincode/supplychain/go/
+│   ├── supplychain.go        # Smart contract
+│   └── go.mod
+├── compose/
+│   ├── compose-test-net.yaml # Docker services for all 3 orgs
+│   └── compose-couch.yaml    # CouchDB for all 3 orgs
+├── configtx/
+│   └── configtx.yaml         # Channel and org configuration
+├── organizations/
+│   └── cryptogen/            # Crypto configs for all 3 orgs
+├── scripts/
+│   ├── createChannel.sh      # Channel creation script
+│   ├── envVar.sh             # Peer environment variables
+│   └── setAnchorPeer.sh      # Anchor peer configuration
+├── network.sh                # Main network management script
+└── README.md
+```
+
+## Team Members
+
+- Siripurapu Abhinaya (221CS102)
+- Vineela Sivvala (221CS155)
+- Sthuthi S (221CS156)
+- Varahi Suvarna (221CS259)
