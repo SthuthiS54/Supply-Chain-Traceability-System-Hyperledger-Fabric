@@ -30,7 +30,31 @@ type HistoryRecord struct {
 	Record    ProductBatch `json:"record"`
 }
 
-// CreateProductBatch - called by Manufacturer
+// ─────────────────────────────────────────────────────────────
+// ROLE-BASED ACCESS CONTROL HELPER
+// ─────────────────────────────────────────────────────────────
+
+// checkMSP verifies that the caller belongs to the expected MSP.
+// If not, it returns a clear error message showing who tried to call.
+func checkMSP(ctx contractapi.TransactionContextInterface, expectedMSP string) error {
+	clientMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get client MSP ID: %v", err)
+	}
+	if clientMSPID != expectedMSP {
+		return fmt.Errorf(
+			"access denied: this function requires %s but was called by %s",
+			expectedMSP, clientMSPID,
+		)
+	}
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────
+// WRITE FUNCTIONS (role-restricted)
+// ─────────────────────────────────────────────────────────────
+
+// CreateProductBatch - MANUFACTURER ONLY
 func (s *SupplyChainContract) CreateProductBatch(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
@@ -38,6 +62,11 @@ func (s *SupplyChainContract) CreateProductBatch(
 	quantity int,
 	location string,
 ) error {
+
+	// ── ROLE CHECK ──
+	if err := checkMSP(ctx, "ManufacturerMSP"); err != nil {
+		return err
+	}
 
 	existing, err := ctx.GetStub().GetState(batchID)
 	if err != nil {
@@ -66,12 +95,17 @@ func (s *SupplyChainContract) CreateProductBatch(
 	return ctx.GetStub().PutState(batchID, batchJSON)
 }
 
-// UpdateShipmentStatus - called by Distributor
+// UpdateShipmentStatus - DISTRIBUTOR ONLY
 func (s *SupplyChainContract) UpdateShipmentStatus(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
 	location string,
 ) error {
+
+	// ── ROLE CHECK ──
+	if err := checkMSP(ctx, "DistributorMSP"); err != nil {
+		return err
+	}
 
 	batch, err := s.getBatch(ctx, batchID)
 	if err != nil {
@@ -96,12 +130,17 @@ func (s *SupplyChainContract) UpdateShipmentStatus(
 	return ctx.GetStub().PutState(batchID, batchJSON)
 }
 
-// ConfirmDelivery - called by Retailer
+// ConfirmDelivery - RETAILER ONLY
 func (s *SupplyChainContract) ConfirmDelivery(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
 	location string,
 ) error {
+
+	// ── ROLE CHECK ──
+	if err := checkMSP(ctx, "RetailerMSP"); err != nil {
+		return err
+	}
 
 	batch, err := s.getBatch(ctx, batchID)
 	if err != nil {
@@ -126,7 +165,11 @@ func (s *SupplyChainContract) ConfirmDelivery(
 	return ctx.GetStub().PutState(batchID, batchJSON)
 }
 
-// QueryBatch - returns current state of a batch
+// ─────────────────────────────────────────────────────────────
+// READ FUNCTIONS (open to all orgs)
+// ─────────────────────────────────────────────────────────────
+
+// QueryBatch - any org can query current state of a batch
 func (s *SupplyChainContract) QueryBatch(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
@@ -134,7 +177,7 @@ func (s *SupplyChainContract) QueryBatch(
 	return s.getBatch(ctx, batchID)
 }
 
-// GetProductHistory - returns full lifecycle using GetHistoryForKey
+// GetProductHistory - any org can view full lifecycle using GetHistoryForKey
 func (s *SupplyChainContract) GetProductHistory(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
@@ -177,7 +220,81 @@ func (s *SupplyChainContract) GetProductHistory(
 	return history, nil
 }
 
-// helper
+// ─────────────────────────────────────────────────────────────
+// RICH COUCHDB QUERIES (open to all orgs)
+// ─────────────────────────────────────────────────────────────
+
+// QueryBatchesByStatus - returns all batches with a given status
+// Example: CREATED, IN_TRANSIT, DELIVERED
+func (s *SupplyChainContract) QueryBatchesByStatus(
+	ctx contractapi.TransactionContextInterface,
+	status string,
+) ([]*ProductBatch, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"status":"%s"}}`, status)
+	return executeRichQuery(ctx, queryString)
+}
+
+// QueryBatchesByHolder - returns all batches held by a specific org
+// Example: Manufacturer, Distributor, Retailer
+func (s *SupplyChainContract) QueryBatchesByHolder(
+	ctx contractapi.TransactionContextInterface,
+	holder string,
+) ([]*ProductBatch, error) {
+
+	queryString := fmt.Sprintf(`{"selector":{"currentHolder":"%s"}}`, holder)
+	return executeRichQuery(ctx, queryString)
+}
+
+// GetAllBatches - returns every batch on the ledger
+func (s *SupplyChainContract) GetAllBatches(
+	ctx contractapi.TransactionContextInterface,
+) ([]*ProductBatch, error) {
+
+	queryString := `{"selector":{"batchID":{"$gt":null}}}`
+	return executeRichQuery(ctx, queryString)
+}
+
+// executeRichQuery runs a CouchDB selector query and returns matching batches
+func executeRichQuery(
+	ctx contractapi.TransactionContextInterface,
+	queryString string,
+) ([]*ProductBatch, error) {
+
+	iterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, fmt.Errorf("rich query failed: %v", err)
+	}
+	defer iterator.Close()
+
+	var results []*ProductBatch
+
+	for iterator.HasNext() {
+		queryResponse, err := iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var batch ProductBatch
+		err = json.Unmarshal(queryResponse.Value, &batch)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, &batch)
+	}
+
+	if results == nil {
+		results = []*ProductBatch{}
+	}
+
+	return results, nil
+}
+
+// ─────────────────────────────────────────────────────────────
+// HELPER
+// ─────────────────────────────────────────────────────────────
+
 func (s *SupplyChainContract) getBatch(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
