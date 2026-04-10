@@ -18,3 +18,5 @@ log.txt
 
 # System files
 .DS_Store
+
+META-INF/

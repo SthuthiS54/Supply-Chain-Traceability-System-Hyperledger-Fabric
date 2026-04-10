@@ -316,6 +316,93 @@ func (s *SupplyChainContract) getBatch(
 	return &batch, nil
 }
 
+// RecallBatch - MANUFACTURER ONLY - marks a batch as recalled
+func (s *SupplyChainContract) RecallBatch(
+    ctx contractapi.TransactionContextInterface,
+    batchID string,
+    reason string,
+) error {
+    if err := checkMSP(ctx, "ManufacturerMSP"); err != nil {
+        return err
+    }
+    batch, err := s.getBatch(ctx, batchID)
+    if err != nil {
+        return err
+    }
+    if batch.Status == "RECALLED" {
+        return fmt.Errorf("batch %s is already recalled", batchID)
+    }
+    batch.Status = "RECALLED"
+    batch.Timestamp = time.Now().Format(time.RFC3339)
+    batch.TransactionID = ctx.GetStub().GetTxID()
+    // store recall reason in Location field (or add a new field)
+    batch.Location = "RECALL: " + reason
+
+    batchJSON, err := json.Marshal(batch)
+    if err != nil {
+        return err
+    }
+    return ctx.GetStub().PutState(batchID, batchJSON)
+}
+
+// DeleteBatch - any authorized org - demonstrates DelState and IsDelete in history
+func (s *SupplyChainContract) DeleteBatch(
+    ctx contractapi.TransactionContextInterface,
+    batchID string,
+) error {
+    existing, err := ctx.GetStub().GetState(batchID)
+    if err != nil {
+        return fmt.Errorf("failed to read batch: %v", err)
+    }
+    if existing == nil {
+        return fmt.Errorf("batch %s does not exist", batchID)
+    }
+    return ctx.GetStub().DelState(batchID)
+}
+
+// GetBatchesByDateRange - CouchDB range query on timestamp field
+// startDate and endDate in RFC3339 format e.g. "2024-01-01T00:00:00Z"
+func (s *SupplyChainContract) GetBatchesByDateRange(
+    ctx contractapi.TransactionContextInterface,
+    startDate string,
+    endDate string,
+) ([]*ProductBatch, error) {
+    queryString := fmt.Sprintf(
+        `{"selector":{"timestamp":{"$gte":"%s","$lte":"%s"}},"sort":[{"timestamp":"asc"}]}`,
+        startDate, endDate,
+    )
+    return executeRichQuery(ctx, queryString)
+}
+
+type LedgerStats struct {
+    Total      int `json:"total"`
+    Created    int `json:"created"`
+    InTransit  int `json:"inTransit"`
+    Delivered  int `json:"delivered"`
+    Recalled   int `json:"recalled"`
+}
+
+// GetLedgerStats - returns aggregate counts of batches by status
+func (s *SupplyChainContract) GetLedgerStats(
+    ctx contractapi.TransactionContextInterface,
+) (*LedgerStats, error) {
+    batches, err := s.GetAllBatches(ctx)
+    if err != nil {
+        return nil, err
+    }
+    stats := &LedgerStats{}
+    for _, b := range batches {
+        stats.Total++
+        switch b.Status {
+        case "CREATED":    stats.Created++
+        case "IN_TRANSIT": stats.InTransit++
+        case "DELIVERED":  stats.Delivered++
+        case "RECALLED":   stats.Recalled++
+        }
+    }
+    return stats, nil
+}
+
 func main() {
 	chaincode, err := contractapi.NewChaincode(&SupplyChainContract{})
 	if err != nil {
