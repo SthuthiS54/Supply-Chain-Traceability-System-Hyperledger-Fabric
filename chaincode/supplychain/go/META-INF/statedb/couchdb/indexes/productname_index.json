@@ -1,0 +1,8 @@
+{
+  "index": {
+    "fields": ["productName", "timestamp"]
+  },
+  "ddoc": "productNameIndex",
+  "name": "productname-index",
+  "type": "json"
+}
