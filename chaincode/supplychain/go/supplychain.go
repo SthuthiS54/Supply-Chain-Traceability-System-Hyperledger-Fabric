@@ -68,9 +68,7 @@ type PaginatedResult struct {
 	Bookmark            string          `json:"bookmark"`
 }
 
-// =============================================================
 // ROLE-BASED ACCESS CONTROL
-// =============================================================
 
 // checkMSP checks whether the organization calling this function
 // matches the expected MSP. If someone from the wrong org tries
@@ -91,9 +89,7 @@ func checkMSP(ctx contractapi.TransactionContextInterface, expectedMSP string) e
 	return nil
 }
 
-// =============================================================
-// WRITE FUNCTIONS
-// =============================================================
+// WRITE FUNCTIONs
 
 // CreateProductBatch is called by the Manufacturer to register a new
 // product batch on the ledger. It checks for duplicate batch IDs before
@@ -106,7 +102,7 @@ func (s *SupplyChainContract) CreateProductBatch(
 	location string,
 ) error {
 
-	// ── ROLE CHECK ──
+	// ROLE CHECK HERE
 	if err := checkMSP(ctx, "ManufacturerMSP"); err != nil {
 		return err
 	}
@@ -147,7 +143,7 @@ func (s *SupplyChainContract) UpdateShipmentStatus(
 	location string,
 ) error {
 
-	// ── ROLE CHECK ──
+	// ROLE CHECK HERE
 	if err := checkMSP(ctx, "DistributorMSP"); err != nil {
 		return err
 	}
@@ -183,7 +179,7 @@ func (s *SupplyChainContract) ConfirmDelivery(
 	location string,
 ) error {
 
-	// ── ROLE CHECK ──
+	// ROLE CHECK HERE
 	if err := checkMSP(ctx, "RetailerMSP"); err != nil {
 		return err
 	}
@@ -370,7 +366,7 @@ func (s *SupplyChainContract) AddQualityCheck(
 		TxID:      ctx.GetStub().GetTxID(),
 	}
 
-	// Store using composite key: QC~batchID~txID
+	// Store using composite key of QC, batchID, txID
 	compositeKey, err := ctx.GetStub().CreateCompositeKey("QC", []string{batchID, ctx.GetStub().GetTxID()})
 	if err != nil {
 		return fmt.Errorf("failed to create composite key: %v", err)
@@ -383,9 +379,7 @@ func (s *SupplyChainContract) AddQualityCheck(
 	return ctx.GetStub().PutState(compositeKey, qcJSON)
 }
 
-// =============================================================
 // READ FUNCTIONS
-// =============================================================
 
 // QueryBatch returns the current state of a batch from the world state.
 // Any organization can call this to check the latest status of a batch.
@@ -536,9 +530,7 @@ func (s *SupplyChainContract) VerifyBatchIntegrity(
 	return intact, nil
 }
 
-// =============================================================
 // RICH COUCHDB QUERIES
-// =============================================================
 
 // QueryBatchesByStatus returns all batches that currently have the given status.
 // Supported values: CREATED, IN_TRANSIT, DELIVERED, RECALLED, TRANSFERRED
@@ -669,9 +661,7 @@ func (s *SupplyChainContract) GetBatchesWithPagination(
 	}, nil
 }
 
-// =============================================================
 // INTERNAL HELPER
-// =============================================================
 
 // getBatch is an internal helper used by most functions to read a batch
 // from the ledger and unmarshal it. Returns a clear error if the batch
@@ -736,9 +726,7 @@ func executeRichQuery(
 	return results, nil
 }
 
-// =============================================================
-// ENTRY POINT
-// =============================================================
+// MAIN ENTRY POINT
 
 // main initializes and starts the chaincode. If chaincode creation
 // or startup fails, the error is printed and the process exits.
